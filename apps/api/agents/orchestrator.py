@@ -20,7 +20,11 @@ import structlog
 from typing import Any, Literal
 
 from langgraph.graph import StateGraph, START, END
-from langgraph.checkpoint.redis import RedisSaver
+
+try:
+    from langgraph.checkpoint.memory import MemorySaver
+except Exception:
+    MemorySaver = None
 
 from agents.state import AgentState
 from agents.agent1_researcher import agent1_researcher
@@ -216,13 +220,26 @@ def build_graph() -> Any:
     )
     graph.add_edge("publisher_node", END)
 
-    # Compile with Redis checkpointer for fault-tolerant state persistence
-    checkpointer = RedisSaver.from_conn_string(settings.REDIS_URL)
-    compiled = graph.compile(
-        checkpointer=checkpointer,
-        interrupt_before=["publisher_node"],   # Hard stop before publish — safety net
-    )
+    # Compile with MemorySaver (or optional Redis if available)
+    checkpointer = None
+    try:
+        if settings.REDIS_URL and "localhost" not in settings.REDIS_URL:
+            from langgraph.checkpoint.redis import RedisSaver
+            checkpointer = RedisSaver.from_conn_string(settings.REDIS_URL)
+    except Exception:
+        pass
 
+    if checkpointer is None and MemorySaver is not None:
+        try:
+            checkpointer = MemorySaver()
+        except Exception:
+            checkpointer = None
+
+    compile_kwargs = {"interrupt_before": ["publisher_node"]}
+    if checkpointer is not None:
+        compile_kwargs["checkpointer"] = checkpointer
+
+    compiled = graph.compile(**compile_kwargs)
     logger.info("LangGraph compiled successfully")
     return compiled
 

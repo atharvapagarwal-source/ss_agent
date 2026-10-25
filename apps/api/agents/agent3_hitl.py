@@ -31,10 +31,13 @@ logger = structlog.get_logger(__name__)
 _redis: Optional[aioredis.Redis] = None
 
 
-def get_redis() -> aioredis.Redis:
+def get_redis() -> Optional[aioredis.Redis]:
     global _redis
     if _redis is None:
-        _redis = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+        try:
+            _redis = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+        except Exception:
+            return None
     return _redis
 
 
@@ -311,12 +314,16 @@ async def _push_approval_notification(
         "status": state.get("post_status"),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     })
-    r = get_redis()
-    await r.publish(channel, payload)
-    if is_urgent:
-        # Also push to urgent queue (displayed as banner alert in portal)
-        await r.lpush(f"tenant:{tenant_id}:urgent_alerts", payload)
-        await r.expire(f"tenant:{tenant_id}:urgent_alerts", 86400)
+    try:
+        r = get_redis()
+        if r:
+            await r.publish(channel, payload)
+            if is_urgent:
+                # Also push to urgent queue (displayed as banner alert in portal)
+                await r.lpush(f"tenant:{tenant_id}:urgent_alerts", payload)
+                await r.expire(f"tenant:{tenant_id}:urgent_alerts", 86400)
+    except Exception as e:
+        logger.debug("Redis notification skipped", error=str(e))
 
 
 # ── Utilities ─────────────────────────────────────────────────────────────────

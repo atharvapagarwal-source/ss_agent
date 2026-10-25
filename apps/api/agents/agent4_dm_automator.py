@@ -29,11 +29,19 @@ from agents.state import AgentState
 
 logger = structlog.get_logger(__name__)
 
-llm = ChatGoogleGenerativeAI(
-    model=settings.GEMINI_MODEL,
-    google_api_key=settings.GEMINI_API_KEY,
-    temperature=0.8,
-)
+def get_llm() -> ChatGoogleGenerativeAI | None:
+    if not settings.GEMINI_API_KEY:
+        return None
+    try:
+        return ChatGoogleGenerativeAI(
+            model=settings.GEMINI_MODEL,
+            google_api_key=settings.GEMINI_API_KEY,
+            temperature=0.8,
+        )
+    except Exception as e:
+        logger.warning("Failed to initialize ChatGoogleGenerativeAI in agent4", error=str(e))
+        return None
+
 
 # Fuzzy match threshold (0-100). 70 = "RESUME" matches "resume", "RÉSUMÉ", "resuem"
 FUZZY_THRESHOLD = 70
@@ -239,16 +247,20 @@ async def _post_public_reply(event: dict, trigger_keyword: str, lead_id: str) ->
     commenter_name = event.get("commenter_display_name") or event.get("commenter_username", "")
 
     try:
-        response = await llm.ainvoke([
-            SystemMessage(content=PUBLIC_REPLY_SYSTEM),
-            HumanMessage(content=(
-                f"Commenter name: {commenter_name}\n"
-                f"Original comment: {event['comment_text']}\n"
-                f"Trigger keyword they used: {trigger_keyword}\n"
-                f"Platform: {platform}"
-            )),
-        ])
-        reply_text = response.content.strip()
+        llm = get_llm()
+        if not llm:
+            reply_text = f"Thanks @{commenter_name}! Sent the resources directly to your inbox."
+        else:
+            response = await llm.ainvoke([
+                SystemMessage(content=PUBLIC_REPLY_SYSTEM),
+                HumanMessage(content=(
+                    f"Commenter name: {commenter_name}\n"
+                    f"Original comment: {event['comment_text']}\n"
+                    f"Trigger keyword they used: {trigger_keyword}\n"
+                    f"Platform: {platform}"
+                )),
+            ])
+            reply_text = response.content.strip()
 
         from services.oauth_vault import get_decrypted_token
         token = await get_decrypted_token(event["tenant_id"], platform)

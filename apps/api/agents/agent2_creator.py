@@ -24,11 +24,19 @@ from agents.state import AgentState, CarouselSlide, PlatformContent
 
 logger = structlog.get_logger(__name__)
 
-llm = ChatGoogleGenerativeAI(
-    model=settings.GEMINI_PRO_MODEL,
-    google_api_key=settings.GEMINI_API_KEY,
-    temperature=0.75,
-)
+def get_llm() -> ChatGoogleGenerativeAI | None:
+    if not settings.GEMINI_API_KEY:
+        return None
+    try:
+        return ChatGoogleGenerativeAI(
+            model=settings.GEMINI_PRO_MODEL,
+            google_api_key=settings.GEMINI_API_KEY,
+            temperature=0.75,
+        )
+    except Exception as e:
+        logger.warning("Failed to initialize ChatGoogleGenerativeAI in agent2", error=str(e))
+        return None
+
 
 # ── Master Content Generation Prompt ─────────────────────────────────────────
 
@@ -108,6 +116,31 @@ async def agent2_creator(state: AgentState) -> dict:
             return await _handle_revision(state, context, revision_prompt, brand, lead_magnet, log)
 
         # ── Step 4: Generate all platform content ────────────────────────────
+        llm = get_llm()
+        if not llm:
+            log.warning("GEMINI_API_KEY not configured, generating mock draft post")
+            topic = state.get("post_title") or "Executive Career Strategy for 2026"
+            return {
+                "post_title": topic,
+                "platform_content": {
+                    "linkedin_text": f"Navigating career transitions in 2026 requires tactical positioning.\n\nComment 'GUIDE' for our full framework.",
+                    "twitter_thread": [
+                        "1/5 🧵 How to navigate modern career transitions in 2026:",
+                        "2/5 🎯 Focus on quantifiable business outcomes.",
+                        "3/5 💡 Drop 'GUIDE' below for the playbook!",
+                    ],
+                    "instagram_caption": "Career growth blueprint for 2026. Comment 'GUIDE' for details!",
+                    "facebook_post": "Looking to accelerate your career? Drop 'GUIDE' below.",
+                },
+                "suggested_cta_keyword": "GUIDE",
+                "lead_magnet_id": lead_magnet.get("id") if lead_magnet else None,
+                "platforms_to_publish": ["linkedin", "instagram", "twitter", "facebook"],
+                "post_status": "AWAITING_HUMAN_APPROVAL",
+                "human_feedback": None,
+                "current_agent": "agent3_hitl",
+                "tokens_used": 0,
+            }
+
         response = await llm.ainvoke([
             SystemMessage(content=CONTENT_SYSTEM),
             HumanMessage(content=context),
@@ -181,6 +214,17 @@ async def _handle_revision(
     """Apply natural-language revision instructions to existing content."""
     existing = json.dumps(state.get("platform_content", {}), indent=2)
     revision_count = len(state.get("hitl_revisions", []))
+
+    llm = get_llm()
+    if not llm:
+        return {
+            "platform_content": state.get("platform_content", {}),
+            "post_title": state.get("post_title", "Untitled Post"),
+            "post_status": "AWAITING_HUMAN_APPROVAL",
+            "human_feedback": None,
+            "current_agent": "agent3_hitl",
+            "tokens_used": 0,
+        }
 
     response = await llm.ainvoke([
         SystemMessage(content=CONTENT_SYSTEM),
